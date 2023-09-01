@@ -116,7 +116,10 @@ pub fn update(app: *App) !bool {
     });
 
     const vertex_buf = app.vertex_buf.freeze(encoder);
-    if (app.next_offset) |off| encoder.writeBuffer(app.offset_buf, 0, &[_]@Vector(2, i32){off});
+    if (app.next_offset) |off| {
+        encoder.writeBuffer(app.offset_buf, 0, &[_]@Vector(2, i32){off});
+        app.next_offset = null;
+    }
     if (offset) |off| app.next_offset = off;
 
     const pass = encoder.beginRenderPass(&render_pass_info);

@@ -29,30 +29,24 @@ fn parseDmaOffset(offset: u32) struct { major: u32, minor: u32 } {
     return .{ .major = major, .minor = minor };
 }
 
-fn sliceToU32(slice: []const u8) u32 {
-    const b0 = @as(u32, @intCast(slice[0]));
-    const b1 = @as(u32, @intCast(slice[1]));
-    const b2 = @as(u32, @intCast(slice[2]));
-    const b3 = @as(u32, @intCast(slice[3]));
-    return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
+fn sliceToInt(comptime T: type, slice: []const u8, offset: u32) T {
+    switch (@typeInfo(T)) {
+        .Int => |info| {
+            return std.mem.readIntSliceNative(T, slice[offset .. offset + (info.bits / 8)]);
+        },
+        else => @compileError("T must be an integer"),
+    }
 }
 
-fn sliceToU16(slice: []const u8) u16 {
-    const b0 = @as(u16, @intCast(slice[0]));
-    const b1 = @as(u16, @intCast(slice[1]));
-    return b0 | (b1 << 8);
-}
+fn intToSlice(val: anytype, slice: []u8, offset: u32) void {
+    const T = @TypeOf(val);
+    comptime var bytes: u32 = undefined;
+    switch (@typeInfo(T)) {
+        .Int => |info| bytes = info.bits / 8,
+        else => @compileError("val must be an integer"),
+    }
 
-fn u32ToSlice(val: u32, slice: []u8) void {
-    slice[0] = @as(u8, @truncate(val));
-    slice[1] = @as(u8, @truncate(val >> 8));
-    slice[2] = @as(u8, @truncate(val >> 16));
-    slice[3] = @as(u8, @truncate(val >> 24));
-}
-
-fn u16ToSlice(val: u16, slice: []u8) void {
-    slice[0] = @as(u8, @truncate(val));
-    slice[1] = @as(u8, @truncate(val >> 8));
+    std.mem.writeIntSliceNative(T, slice[offset .. offset + bytes], val);
 }
 
 /// Iterator over a linked list of DMA headers
@@ -72,7 +66,7 @@ const LinkedListHeaderIter = struct {
             return null;
         }
         const prev_addr = self.addr;
-        const header = sliceToU32(self.ram[prev_addr .. prev_addr + 4]);
+        const header = sliceToInt(u32, self.ram, prev_addr);
         const transfer_sz = header >> 24;
 
         if (header & 0x800000 != 0) {
@@ -115,16 +109,13 @@ pub const Memory = struct {
             .arena = arena,
         };
     }
-    /// Load 4 bytes from bios at offset
-    fn load32LEBios(self: *const Memory, offset: u32) u32 {
-        return sliceToU32(self.bios[offset .. offset + 4]);
+    /// Load X bytes from bios at offset
+    fn loadLEBios(self: *const Memory, comptime T: type, offset: u32) T {
+        return sliceToInt(T, self.bios, offset);
     }
-    /// Load 4 bytes from ram at offset
-    fn load32LERam(self: *const Memory, offset: u32) u32 {
-        return sliceToU32(self.ram[offset .. offset + 4]);
-    }
-    fn load16LERam(self: *const Memory, offset: u32) u16 {
-        return sliceToU16(self.ram[offset .. offset + 2]);
+    /// Load X bytes from ram at offset
+    fn loadLERam(self: *const Memory, comptime T: type, offset: u32) T {
+        return sliceToInt(T, self.ram, offset);
     }
     fn load32LEGpu(self: *const Memory, offset: u32) !u32 {
         return switch (offset) {
@@ -154,13 +145,9 @@ pub const Memory = struct {
             else => PsxError.OutOfRange,
         };
     }
-    /// Store 4 bytes to ram at offset
-    fn store32LERam(self: *Memory, offset: u32, val: u32) void {
-        u32ToSlice(val, self.ram[offset .. offset + 4]);
-    }
-    /// store 2 bytes to ram at offset
-    fn store16LERam(self: *Memory, offset: u32, val: u16) void {
-        u16ToSlice(val, self.ram[offset .. offset + 2]);
+    /// Store X bytes to ram at offset
+    fn storeLERam(self: *Memory, offset: u32, val: anytype) void {
+        intToSlice(val, self.ram, offset);
     }
     /// DMA Transfer
     fn storeDma(self: *Memory, offset: u32, val: u32) !void {
@@ -219,7 +206,7 @@ pub const Memory = struct {
             var addr = header.addr;
             while (transfer_sz > 0) : (transfer_sz -= 1) {
                 addr = (addr + 4) & 0x1ffffc;
-                const cmd = self.load32LERam(addr);
+                const cmd = self.loadLERam(u32, addr);
                 try self.gpu.gp0Exec(cmd);
             }
         }
@@ -249,7 +236,7 @@ pub const Memory = struct {
         }
     }
     fn stepDmaFromRam(self: *Memory, port: dmaIm.Port, cur_addr: u32) !void {
-        const src = self.load32LERam(cur_addr);
+        const src = self.loadLERam(u32, cur_addr);
         try switch (port) {
             dmaIm.Port.Gpu => self.gpu.gp0Exec(src),
             else => PsxError.Unimplimented,
@@ -260,20 +247,34 @@ pub const Memory = struct {
             dmaIm.Port.Otc => if (transfer_sz == 1) 0xffffff else (addr -% 4) & 0x1fffff,
             else => PsxError.Unimplimented,
         };
-        self.store32LERam(cur_addr, src);
+        self.storeLERam(cur_addr, src);
     }
-    /// Load 4 bytes from mapped memory at address
-    pub fn load32(self: *const Memory, vaddr: u32) !u32 {
+    /// Load X bytes from mapped memory at address
+    pub fn load(self: *const Memory, comptime T: type, vaddr: u32) !T {
+        if (@bitSizeOf(T) < 8) {
+            @compileError("T must be greater than 8 bits");
+        }
+
         const addr = translateAddr(vaddr);
         return switch (addr) {
-            maps.BIOS.begin()...maps.BIOS.end() => self.load32LEBios(maps.BIOS.offset(addr)),
-            maps.RAM.begin()...maps.RAM.end() => self.load32LERam(maps.RAM.offset(addr)),
+            maps.BIOS.begin()...maps.BIOS.end() => self.loadLEBios(T, maps.BIOS.offset(addr)),
+            maps.EXP1.begin()...maps.EXP1.end() => @as(T, 0xff),
+            maps.SPU.begin()...maps.SPU.end() => @as(T, 0),
+            maps.RAM.begin()...maps.RAM.end() => self.loadLERam(T, maps.RAM.offset(addr)),
             maps.IRQ_CNT.begin()...maps.IRQ_CNT.end() => {
                 std.debug.print("IRQ CNT R {x}\n", .{addr});
-                return 0;
+                return @as(T, 0);
             },
-            maps.DMA.begin()...maps.DMA.end() => self.loadDma(maps.DMA.offset(addr)),
+            maps.DMA.begin()...maps.DMA.end() => {
+                if (T != u32) {
+                    @panic("unsupported type for DMA load");
+                }
+                return self.loadDma(maps.DMA.offset(addr));
+            },
             maps.GPU.begin()...maps.GPU.end() => {
+                if (T != u32) {
+                    @panic("unsuported type for GPU load");
+                }
                 return self.load32LEGpu(maps.GPU.offset(addr));
             },
             maps.TIMERS.begin()...maps.TIMERS.end() => {
@@ -286,37 +287,10 @@ pub const Memory = struct {
             },
         };
     }
-    /// Load a byte from
-    pub fn load8(self: *const Memory, vaddr: u32) !u8 {
+    pub fn store(self: *Memory, vaddr: u32, val: anytype) !void {
         const addr = translateAddr(vaddr);
-        return switch (addr) {
-            maps.BIOS.begin()...maps.BIOS.end() => self.bios[maps.BIOS.offset(addr)],
-            maps.EXP1.begin()...maps.EXP1.end() => 0xff,
-            maps.RAM.begin()...maps.RAM.end() => self.ram[maps.RAM.offset(addr)],
-            else => {
-                std.debug.print("unhandled load8 {x}\n", .{addr});
-                return PsxError.OutOfRange;
-            },
-        };
-    }
-    pub fn load16(self: *const Memory, vaddr: u32) !u16 {
-        const addr = translateAddr(vaddr);
-        return switch (addr) {
-            maps.SPU.begin()...maps.SPU.end() => 0,
-            maps.RAM.begin()...maps.RAM.end() => self.load16LERam(maps.RAM.offset(addr)),
-            maps.IRQ_CNT.begin()...maps.IRQ_CNT.end() => {
-                std.debug.print("IRQ CNT R {x}\n", .{addr});
-                return 0;
-            },
-            else => {
-                std.debug.print("unhandled load16 {x}\n", .{addr});
-                return PsxError.OutOfRange;
-            },
-        };
-    }
-    pub fn store32(self: *Memory, vaddr: u32, val: u32) !void {
-        const addr = translateAddr(vaddr);
-        try switch (addr) {
+        switch (addr) {
+            maps.EXP2.begin()...maps.EXP2.end() => {},
             // Mem control
             maps.MEMC.begin()...maps.MEMC.end() => {},
             // Ram Size
@@ -325,57 +299,35 @@ pub const Memory = struct {
             maps.CACHEC.begin()...maps.CACHEC.end() => {
                 std.debug.print("Cache control {x}\n", .{val});
             },
-            maps.RAM.begin()...maps.RAM.end() => self.store32LERam(maps.RAM.offset(addr), val),
+            maps.RAM.begin()...maps.RAM.end() => self.storeLERam(maps.RAM.offset(addr), val),
+            maps.SPU.begin()...maps.SPU.end() => {},
             maps.IRQ_CNT.begin()...maps.IRQ_CNT.end() => {
                 std.debug.print("IRQ CNT {x}\n", .{val});
-                return;
             },
-            maps.DMA.begin()...maps.DMA.end() => self.storeDma(maps.DMA.offset(addr), val),
-            maps.GPU.begin()...maps.GPU.end() => switch (maps.GPU.offset(addr)) {
-                0 => self.gpu.gp0Exec(val),
-                4 => self.gpu.gp1_exec(val),
-                else => PsxError.Unimplimented,
+            maps.DMA.begin()...maps.DMA.end() => {
+                if (@TypeOf(val) != u32) {
+                    @panic("unsupported DMA store");
+                }
+                try self.storeDma(maps.DMA.offset(addr), val);
+            },
+            maps.GPU.begin()...maps.GPU.end() => {
+                if (@TypeOf(val) != u32) {
+                    @panic("unsupported GPU store");
+                }
+                try switch (maps.GPU.offset(addr)) {
+                    0 => self.gpu.gp0Exec(val),
+                    4 => self.gpu.gp1_exec(val),
+                    else => PsxError.Unimplimented,
+                };
             },
             maps.TIMERS.begin()...maps.TIMERS.end() => {
                 std.debug.print("TIMERS W {x}\n", .{val});
-                return;
             },
             else => {
                 std.debug.print("unhandled store {x} va {x}\n", .{ addr, vaddr });
                 return PsxError.OutOfRange;
             },
-        };
-    }
-    pub fn store16(self: *Memory, vaddr: u32, val: u16) !void {
-        const addr = translateAddr(vaddr);
-        return switch (addr) {
-            maps.SPU.begin()...maps.SPU.end() => {},
-            maps.TIMERS.begin()...maps.TIMERS.end() => {
-                std.debug.print("TIMERS W {x}\n", .{val});
-                return;
-            },
-            maps.RAM.begin()...maps.RAM.end() => self.store16LERam(maps.RAM.offset(addr), val),
-            maps.IRQ_CNT.begin()...maps.IRQ_CNT.end() => {
-                std.debug.print("IRQ CNT W {x}\n", .{val});
-                return;
-            },
-            else => {
-                std.debug.print("unhandled store16 {x} va {x}\n", .{ addr, vaddr });
-                return PsxError.OutOfRange;
-            },
-        };
-    }
-    pub fn store8(self: *Memory, vaddr: u32, val: u8) !void {
-        const addr = translateAddr(vaddr);
-        return switch (addr) {
-            // exp_2
-            maps.EXP2.begin()...maps.EXP2.end() => {},
-            maps.RAM.begin()...maps.RAM.end() => self.ram[maps.RAM.offset(addr)] = val,
-            else => {
-                std.debug.print("unhandled store8 {x}\n", .{addr});
-                return PsxError.OutOfRange;
-            },
-        };
+        }
     }
     /// Load a bios file into memory
     /// the `path` passed must be an absolute path

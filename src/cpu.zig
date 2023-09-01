@@ -165,7 +165,7 @@ pub const Cpu = struct {
         }
 
         const v = self.reg(t);
-        try self.mem.store32(addr, v);
+        try self.mem.store(addr, v);
     }
     /// sll rt, rd, imm5
     fn sll(self: *Cpu, instr: Instruction) void {
@@ -240,7 +240,7 @@ pub const Cpu = struct {
             return self.exception(PsxExcept.LoadAddr);
         }
 
-        const v = try self.mem.load32(addr);
+        const v = try self.mem.load(u32, addr);
         self.load = .{ t, v };
     }
     /// sltu rd, rs, rt
@@ -273,7 +273,7 @@ pub const Cpu = struct {
         }
 
         const v = self.reg(t);
-        try self.mem.store16(addr, @as(u16, @truncate(v)));
+        try self.mem.store(addr, @as(u16, @truncate(v)));
     }
     /// jal imm5
     fn jal(self: *Cpu, instr: Instruction) void {
@@ -301,7 +301,7 @@ pub const Cpu = struct {
         const s = instr.rs();
         const addr = self.reg(s) +% i;
         const v = self.reg(t);
-        try self.mem.store8(addr, @as(u8, @truncate(v)));
+        try self.mem.store(addr, @as(u8, @truncate(v)));
     }
     /// jr rs
     fn jr(self: *Cpu, instr: Instruction) void {
@@ -315,7 +315,7 @@ pub const Cpu = struct {
         const t = instr.rt();
         const s = instr.rs();
         const addr = self.reg(s) +% i;
-        const v = @as(i8, @bitCast(try self.mem.load8(addr)));
+        const v = @as(i8, @bitCast(try self.mem.load(u8, addr)));
         self.load = .{ t, @as(u32, @bitCast(@as(i32, @intCast(v)))) };
     }
     /// beq rs, rt, imm
@@ -369,7 +369,7 @@ pub const Cpu = struct {
         const t = instr.rt();
         const s = instr.rs();
         const addr = self.reg(s) +% i;
-        const v = try self.mem.load8(addr);
+        const v = try self.mem.load(u8, addr);
         self.load = .{ t, @as(u32, @intCast(v)) };
     }
     /// jalr rd, rs
@@ -518,7 +518,7 @@ pub const Cpu = struct {
             return self.exception(PsxExcept.LoadAddr);
         }
 
-        const v = try self.mem.load16(addr);
+        const v = try self.mem.load(u16, addr);
         self.load = .{ t, @as(u32, @intCast(v)) };
     }
     /// sllv rd, rt, rs
@@ -541,7 +541,7 @@ pub const Cpu = struct {
             return self.exception(PsxExcept.LoadAddr);
         }
 
-        const v = @as(i16, @bitCast(try self.mem.load16(addr)));
+        const v = @as(i16, @bitCast(try self.mem.load(u16, addr)));
 
         self.load = .{ t, @as(u32, @bitCast(@as(i32, @intCast(v)))) };
     }
@@ -647,7 +647,7 @@ pub const Cpu = struct {
         const cur_v = self.out_gpr[t];
 
         const allign_addr = addr & ~@as(u32, 3);
-        const allign_word = try self.mem.load32(allign_addr);
+        const allign_word = try self.mem.load(u32, allign_addr);
 
         // allignment
         const a: u5 = @truncate((addr & 3) * 8);
@@ -665,7 +665,7 @@ pub const Cpu = struct {
         const cur_v = self.out_gpr[t];
 
         const allign_addr = addr & ~@as(u32, 3);
-        const allign_word = try self.mem.load32(allign_addr);
+        const allign_word = try self.mem.load(u32, allign_addr);
 
         const a: u5 = @truncate((addr & 3) * 8);
         const v = (cur_v & (~(@as(u32, 0xffffffff) >> a))) | (allign_word >> a);
@@ -681,7 +681,7 @@ pub const Cpu = struct {
         const v = self.reg(t);
 
         const allign_addr = addr & ~@as(u32, 3);
-        const cur_mem = try self.mem.load32(allign_addr);
+        const cur_mem = try self.mem.load(u32, allign_addr);
 
         // Too lazy to optimize this
         const mem = switch (addr & 3) {
@@ -691,7 +691,7 @@ pub const Cpu = struct {
             3 => (cur_mem & 0x00000000) | (v >> 0),
             else => unreachable,
         };
-        try self.mem.store32(allign_addr, mem);
+        try self.mem.store(allign_addr, mem);
     }
     /// swr rt, imm(rs)
     fn swr(self: *Cpu, instr: Instruction) !void {
@@ -703,7 +703,7 @@ pub const Cpu = struct {
         const v = self.reg(t);
 
         const allign_addr = addr & ~@as(u32, 3);
-        const cur_mem = try self.mem.load32(allign_addr);
+        const cur_mem = try self.mem.load(u32, allign_addr);
 
         const mem = switch (addr & 3) {
             0 => (cur_mem & 0x00000000) | (v << 0),
@@ -712,7 +712,7 @@ pub const Cpu = struct {
             3 => (cur_mem & 0x00ffffff) | (v << 24),
             else => unreachable,
         };
-        try self.mem.store32(allign_addr, mem);
+        try self.mem.store(allign_addr, mem);
     }
     fn illegal(self: *Cpu, instr: Instruction) void {
         std.debug.print("Illegal instr {x}\n", .{instr.opcode});
@@ -877,7 +877,7 @@ pub const Cpu = struct {
             return self.exception(PsxExcept.LoadAddr);
         }
 
-        const instr_raw = try self.mem.load32(self.pc);
+        const instr_raw = try self.mem.load(u32, self.pc);
         const instr = Instruction{ .opcode = instr_raw };
 
         self.pc = self.next_pc;

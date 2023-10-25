@@ -1,4 +1,4 @@
-const gpu = @import("core").gpu;
+const gpu = @import("mach-core").gpu;
 const attrs = @import("attrs.zig");
 
 const Vertex = attrs.Vertex;

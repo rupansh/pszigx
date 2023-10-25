@@ -1,5 +1,5 @@
 const std = @import("std");
-const core = @import("core");
+const core = @import("mach-core");
 const gpu = core.gpu;
 const emu_thread = @import("emu_thread.zig");
 const BlockingStore = @import("blocking_store.zig").BlockingStore;

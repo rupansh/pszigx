@@ -1,5 +1,5 @@
 const Vertex = @import("attrs.zig").Vertex;
-const core = @import("core");
+const core = @import("mach-core");
 const gpu = core.gpu;
 const std = @import("std");
 
